@@ -10,9 +10,6 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
-concurrency:
-  group: index-writes
-  cancel-in-progress: false
 jobs:
   checkpoint:
     runs-on: ubuntu-latest
@@ -29,10 +26,17 @@ jobs:
         run: |
           umask 077
           printf '%s\n' "$TIMEKEEPER_KEY" > "$RUNNER_TEMP/timekeeper.key"
-          toolchain/build/bin/dream toolchain/mind.dream index checkpoint --index . --signing-key "$RUNNER_TEMP/timekeeper.key"
-          rm -f "$RUNNER_TEMP/timekeeper.key"
           git config user.name "dream-index"
           git config user.email "dream-index@users.noreply.github.com"
-          git add index.log
-          git commit -qm "Checkpoint"
-          git push
+          # A checkpoint signs the head it is placed on, so a race is lost by
+          # signing again on the newer head.
+          for attempt in 1 2 3 4 5 6; do
+            git fetch -q origin main && git reset -q --hard origin/main
+            toolchain/build/bin/dream toolchain/mind.dream index checkpoint --index . --signing-key "$RUNNER_TEMP/timekeeper.key"
+            git add index.log
+            git commit -qm "Checkpoint"
+            if git push -q origin HEAD:main; then rm -f "$RUNNER_TEMP/timekeeper.key"; exit 0; fi
+            sleep $((attempt * 3))
+          done
+          rm -f "$RUNNER_TEMP/timekeeper.key"
+          exit 1

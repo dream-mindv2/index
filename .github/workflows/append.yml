@@ -10,9 +10,10 @@ on:
 permissions:
   contents: write
   issues: write
-concurrency:
-  group: index-writes
-  cancel-in-progress: false
+# No concurrency group: GitHub keeps one pending run per group and cancels
+# the rest, which dropped submissions. Runs race instead, and the loser
+# appends again on top of the winner -- which is always valid, since a
+# signature never covers where its entry was placed.
 jobs:
   append:
     if: >-
@@ -36,15 +37,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           printf '%s\n' "$BODY" > "$RUNNER_TEMP/body.txt"
-          if out=$(toolchain/build/bin/dream toolchain/mind.dream index append . "$RUNNER_TEMP/body.txt" 2>&1); then
-            git config user.name "dream-index"
-            git config user.email "dream-index@users.noreply.github.com"
+          git config user.name "dream-index"
+          git config user.email "dream-index@users.noreply.github.com"
+          # Appended to the newest log there is, and again if another run
+          # pushed first.
+          for attempt in 1 2 3 4 5 6; do
+            git fetch -q origin main && git reset -q --hard origin/main
+            if ! out=$(toolchain/build/bin/dream toolchain/mind.dream index append . "$RUNNER_TEMP/body.txt" 2>&1); then
+              printf 'Not appended:\n\n```\n%s\n```\n\nEdit the issue to try again.\n' "$out" > "$RUNNER_TEMP/reply.md"
+              gh issue comment "$NUMBER" --body-file "$RUNNER_TEMP/reply.md"
+              exit 0
+            fi
             git add index.log
             git commit -qm "Append #$NUMBER: $(head -c 72 "$RUNNER_TEMP/body.txt" | tr -d '`\n')"
-            git push
-            printf 'Appended.\n\n```\n%s\n```\n' "$out" > "$RUNNER_TEMP/reply.md"
-            gh issue close "$NUMBER" --comment "$(cat "$RUNNER_TEMP/reply.md")"
-          else
-            printf 'Not appended:\n\n```\n%s\n```\n\nEdit the issue to try again.\n' "$out" > "$RUNNER_TEMP/reply.md"
-            gh issue comment "$NUMBER" --body-file "$RUNNER_TEMP/reply.md"
-          fi
+            if git push -q origin HEAD:main; then
+              printf 'Appended.\n\n```\n%s\n```\n' "$out" > "$RUNNER_TEMP/reply.md"
+              gh issue close "$NUMBER" --comment "$(cat "$RUNNER_TEMP/reply.md")"
+              exit 0
+            fi
+            sleep $((attempt * 3))
+          done
+          echo "could not push after six attempts" >&2
+          exit 1
