@@ -1,0 +1,16 @@
+# Every change to the log, checked as a reader checks it -- signatures,
+# keepers, the chain -- whoever made it.
+name: Verify
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libffi-dev libssl-dev
+      - uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: toolchain-${{ hashFiles('ci/build-mind.sh') }}
+      - run: sh ci/build-mind.sh
+      - run: MIND_INDEX_MAX_AGE=0 toolchain/build/bin/dream toolchain/mind.dream index verify --index .

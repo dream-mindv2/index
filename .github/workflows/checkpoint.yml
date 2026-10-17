@@ -1,0 +1,38 @@
+# Once a day: sign that the log was this, now, with the timekeeper key -- the
+# one key here, which can sign checkpoints and nothing else. A reader refuses
+# an index whose newest checkpoint is older than its keepers promised (7
+# days), so this is what keeps the index readable, and what keeps a host from
+# holding anyone on an old copy.
+name: Checkpoint
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: index-writes
+  cancel-in-progress: false
+jobs:
+  checkpoint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libffi-dev libssl-dev
+      - uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: toolchain-${{ hashFiles('ci/build-mind.sh') }}
+      - run: sh ci/build-mind.sh
+      - env:
+          TIMEKEEPER_KEY: ${{ secrets.TIMEKEEPER_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$TIMEKEEPER_KEY" > "$RUNNER_TEMP/timekeeper.key"
+          toolchain/build/bin/dream toolchain/mind.dream index checkpoint --index . --signing-key "$RUNNER_TEMP/timekeeper.key"
+          rm -f "$RUNNER_TEMP/timekeeper.key"
+          git config user.name "dream-index"
+          git config user.email "dream-index@users.noreply.github.com"
+          git add index.log
+          git commit -qm "Checkpoint"
+          git push
